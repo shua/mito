@@ -1,0 +1,264 @@
+<html>
+<head>
+<script type='text/javascript'>
+var win = { w:0, h:0, ctx:{}, e:{}, mouse: { x:0, y:0 }, game: {} };
+var field = { x: 4096, y: 4096 };
+var cam = { pos: { x:0, y:0 }, zoom:1, attach:{} };
+var world = { 
+    bodies: [], 
+    move: function(o, d) {
+        return d;
+    }
+};
+
+function foreach(elems, fun) {
+    if(!(elems && elems.length && elems[0])) {
+        console && console.error && console.error("elems passed is not an array" + elems + fun);
+        return;
+    }
+    for(var i=0; i<elems.length; ++i) {
+        fun(elems[i]);
+    }
+}
+
+function getMousePos(canvas, evt) {
+    var rect = canvas.getBoundingClientRect();
+    return {
+        x: evt.clientX - rect.left,
+        y: evt.clientY - rect.top
+    };
+}
+
+function randomColor() {
+    var r = Math.floor(Math.random() * 64)*4;
+    var g = Math.floor(Math.random() * 64)*4;
+    var b = Math.floor(Math.random() * 64)*4;
+    return 'rgb('+r+','+g+','+b+')';
+}
+
+var Pos = {
+    get: function(x,y) { return {x:x, y:y} },
+    set: function(a,b) { a.x=b.x; a.y=b.y },
+    add: function(a,b) { return {x:a.x+b.x, y:a.y+b.y } },
+    sub: function(a,b) { return {x:a.x-b.x, y:a.y-b.y } },
+    scale: function(a,s) { return {x:a.x*s, y:a.y*s } },
+    sqhyp: function(a) { return a.x*a.x+a.y*a.y },
+    norm: function(a) { return Pos.scale(a, 1/Math.sqrt(Pos.sqhyp(a))); }
+};
+
+function Cell(init) {
+    var ret = { 
+        mass: 4, 
+        pos: { x: 0, y:0 }, 
+        rad:80, 
+        color:randomColor(), 
+        name: 'Yooo' 
+    };
+    ret.draw = (function(ctx, trans) {
+        var rel = Pos.add(this.pos, trans);
+        ctx.fillStyle = this.color;
+        ctx.strokeStyle = '#888888';
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.arc(rel.x, rel.y, this.rad, 0, 2*Math.PI);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#eeeeee';
+        ctx.fillText(this.name, rel.x, rel.y);
+        ctx.strokeStyle = '#222222';
+        ctx.lineWidth = 1;
+        ctx.strokeText(this.name, rel.x, rel.y);
+    }).bind(ret);
+    ret.setMass = (function(m) {
+        this.mass = m;
+        this.rad = m*20;
+    }).bind(ret);
+    return ret;
+}
+
+function Local() {
+    var ret = { cells: [ Cell() ] };
+    ret.updateCell = (function(d,c) {
+        var rel = Pos.sub( c.pos, cam.pos);
+        var mouse = Pos.sub(
+                Pos.sub(
+                    win.mouse, Pos.scale(
+                        Pos.get(win.w,win.h), 0.5)), rel);
+        var sqdist = Pos.sqhyp(mouse);
+        var vel = Pos.scale(mouse, 1/c.rad);
+        if(sqdist >= Math.pow(c.rad, 2))
+            vel = Pos.norm(mouse);
+        if(c.jet && c.jet.t < 3000) {
+            if(c.jet.t == 0) {
+                Pos.set(c.jet, vel);
+            }
+            vel = Pos.add(vel, Pos.scale(c.jet,(3000-c.jet.t)/3000));
+            c.jet.t += d;
+        }
+        c.pos = world.move(this, Pos.add(c.pos, Pos.scale(vel, d/c.mass)));
+
+        if(c.pos.x > field.x)
+            c.pos.x = field.x;
+        else if(c.pos.x < 0)
+            c.pos.x = 0;
+        if(c.pos.y > field.y)
+            c.pos.y = field.y;
+        else if(c.pos.y < 0)
+            c.pos.y = 0;
+    }).bind(ret);
+    ret.update = (function(d) {
+        foreach(this.cells, function(c) {
+            ret.updateCell(d,c);
+        });
+    }).bind(ret);
+    ret.draw = (function(ctx, trans) {
+        foreach(this.cells, function(c) {
+            c.draw(ctx, trans);
+        });
+    }).bind(ret);
+
+    ret.getFocus = (function() {
+        var r = { x:0, y:0 }
+        foreach(this.cells, function(c) {
+            r = Pos.add(r,c.pos);
+        });
+        return Pos.scale(r, this.cells.length);
+    }).bind(ret);
+
+    ret.onKeyDown = (function(e) {
+        if(e.keyCode == 32) { /* space */
+            var babies = []
+            foreach(this.cells, function(c) {
+                c.setMass(c.mass/2);
+                var b = Cell();
+                b.mass = c.mass;
+                b.rad = c.rad;
+                b.color = c.color;
+                b.name = c.name;
+                Pos.set(b.pos, c.pos);
+                b.jet = {x:0, y:0, t:0 };
+                babies[babies.length] = b;
+            });
+            this.cells.push.apply(this.cells, babies);
+        }
+    }).bind(ret);
+    window.addEventListener('keydown', ret.onKeyDown);
+    return ret;
+}
+
+function Food() {
+    var ret = { 
+        pos: { 
+            x: Math.floor(Math.random()*field.x), 
+            y: Math.floor(Math.random()*field.y) 
+        },
+        color: randomColor(),
+        mass: 1,
+        rad: 20,
+    };
+    ret.draw = (function(ctx, trans) {
+        var rel = Pos.add(this.pos, trans);
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(rel.x, rel.y, this.rad, 0, 2*Math.PI);
+        ctx.fill();
+        ctx.closePath();
+    }).bind(ret);
+    return ret;
+}
+
+function Game() {
+    var ret = {
+        players: [],
+        food: [],
+        lastTick: 0,
+        fps: 60,
+        _int: {},
+    };
+    ret.camUpdate = (function(d) {
+        if(cam.attach.getFocus) {
+            cam.pos = cam.attach.getFocus();
+        } else if(cam.attach.pos.x && cam.attach.pos.y) {
+            cam.pos = { x:cam.attach.pos.x, y:cam.attach.pos.y };
+        } else if(cam.attach.x && cam.attach.y) {
+            cam.pos = { x:cam.attach.x, y:cam.attach.y };
+        }
+    }).bind(ret);
+    ret.update = (function() {
+        var ctime = (new Date).getTime();
+        var d = ctime - this.lastTick;
+        var i, arLen, c;
+        foreach(this.players, function(c) {
+            c.update(d);
+        });
+        this.camUpdate(d);
+        this.draw();
+        this.lastTick = ctime;
+    }).bind(ret);
+    ret.draw = (function() {
+        var trans = Pos.sub(Pos.scale(Pos.get(win.w,win.h),0.5),cam.pos);
+        var c;
+        trans.z = cam.zoom;
+        win.ctx.clearRect(0,0,win.w,win.h);
+        win.ctx.lineWidth = 1;
+        win.ctx.strokeStyle = '#444444';
+        for(i=trans.x; i<=(field.x+trans.x) && i<win.w; i+=128) {
+            win.ctx.moveTo(i,trans.y);
+            win.ctx.lineTo(i,field.y+trans.y);
+            win.ctx.stroke();
+        }
+        for(i=trans.y; i<=(field.y+trans.y) && i<win.h; i+=128) {
+            win.ctx.moveTo(trans.x,i);
+            win.ctx.lineTo(field.x+trans.x,i);
+            win.ctx.stroke();
+        }
+        foreach(this.food, function(c) { c.draw(win.ctx, trans); });
+        win.ctx.textAlign = 'center';
+        win.ctx.font = 'bold 30pt monospace';
+        foreach(this.players, function(c) {
+            c.draw(win.ctx, trans);
+        });
+    }).bind(ret);
+    ret.start = (function() {
+        cam.attach = Local();
+        this.players[this.players.length] = cam.attach;
+        for(var i=0; i<50; ++i) this.food[i] = Food();
+        this._int = setInterval(this.update, 1000/this.fps);
+        this.lastTick = (new Date).getTime();
+    }).bind(ret);
+    ret.stop = (function() {
+        clearInterval(this._int);
+    }).bind(ret);
+    return ret;
+}
+
+document.addEventListener ('DOMContentLoaded',  function() {
+    win.e = document.getElementById('mito');
+    win.e.addEventListener('mousemove', function(e) {
+        win.mouse = getMousePos(win.e, e);
+    });
+    window.addEventListener('resize', function(e) {
+        win.w = win.e.offsetWidth;
+        win.h = win.e.offsetHeight;
+        win.e.width = win.w;
+        win.e.height = win.h;
+    });
+    win.game = Game();
+    win.w = win.e.offsetWidth;
+    win.h = win.e.offsetHeight;
+    win.e.width = win.w;
+    win.e.height = win.h;
+    win.ctx = win.e.getContext('2d');
+    win.ctx.fillStyle = '#444444';
+
+    win.game.start();
+});
+</script>
+<style type="text/css">
+* { margin:0; }
+</style>
+</head>
+<body>
+    <canvas id="mito" style="width:100%;height:100%" />
+</body>
+</html>
