@@ -5,21 +5,70 @@ var win = { w:0, h:0, ctx:{}, e:{}, mouse: { x:0, y:0 }, game: {} };
 var field = { x: 4096, y: 4096 };
 var cam = { pos: { x:0, y:0 }, zoom:1, attach:{} };
 var world = { 
-    bodies: [], 
-    move: function(o, d) {
+    bodies: [],
+    id: 0,
+    gid: 1,
+    move: function(b1, v) {
+        var d = Pos.add(b1.o.pos, v);
+        var sv = Pos.sqhyp(v);
+        this.bodies.forEach(function(b2) {
+            var sd = 0, sb = 0, pd = {};
+            if(b1 === b2) return;
+            if(b1 === undefined) {
+                console.log("b1 is undefined");
+                return;
+            }
+            if(b2 === undefined) {
+                console.log("b2 is undefined");
+                return;
+            }
+            pd = Pos.sub(d, b2.o.pos);
+            sd = Pos.sqhyp(pd);
+            if(b1.gid !== 0 && b1.gid === b2.gid && b1.clip && b2.clip) { 
+                sb = Math.pow(b1.o.rad+b2.o.rad, 2);
+                if(sd <= sb) {
+                    sd = Math.sqrt(sd);
+                    sb = Math.sqrt(sb) - sd;
+                    v = Pos.scale(pd, sb/sd);
+                    d = Pos.add(d, v);
+                    sd = sb;
+                }
+            } else if(b1.o.onCollision) {
+                sb = Math.pow(b1.o.rad, 2);
+                if(sd <= sb) b1.o.onCollision({ body:b2, sqdst: sd, sqbnd: sb});
+            }
+        });
+        
+        if(d.x + b1.o.rad >= field.x) {
+            d.x = field.x - b1.o.rad;
+        } else if(d.x <= b1.o.rad) {
+            d.x = b1.o.rad;
+        } 
+        if(d.y + b1.o.rad >= field.y) {
+            d.y = field.y - b1.o.rad;
+        } else if(d.y <= b1.o.rad) {
+            d.y = b1.o.rad;
+        }
+        
         return d;
-    }
+    },
+    spawn: function(o) {
+        var id = this.id;
+        this.bodies[id] = { o: o, gid: 0, clip: 0 };
+        ++this.id;
+        return this.bodies[id];
+    },
+    kill: function(b) {
+        var i = this.bodies.indexOf(b);
+        if(i !== -1)
+            this.bodies.splice(i, 1);
+    },
+    newGID: function() {
+        var gid= this.gid;
+        ++this.gid;
+        return gid;
+    },
 };
-
-function foreach(elems, fun) {
-    if(!(elems && elems.length && elems[0])) {
-        console && console.error && console.error("elems passed is not an array" + elems + fun);
-        return;
-    }
-    for(var i=0; i<elems.length; ++i) {
-        fun(elems[i]);
-    }
-}
 
 function getMousePos(canvas, evt) {
     var rect = canvas.getBoundingClientRect();
@@ -51,18 +100,21 @@ function Cell(init) {
         mass: 4, 
         pos: { x: 0, y:0 }, 
         rad:80, 
-        color:randomColor(), 
-        name: 'Yooo' 
+        color: randomColor(), 
+        name: 'Yooo',
+        phys: {},
+        par: undefined,
     };
     ret.draw = (function(ctx, trans) {
-        var rel = Pos.add(this.pos, trans);
+        var rel = Pos.scale(Pos.add(this.pos, trans), trans.z);
         ctx.fillStyle = this.color;
         ctx.strokeStyle = '#888888';
         ctx.lineWidth = 5;
         ctx.beginPath();
-        ctx.arc(rel.x, rel.y, this.rad, 0, 2*Math.PI);
+        ctx.arc(rel.x, rel.y, this.rad*trans.z, 0, 2*Math.PI);
         ctx.fill();
         ctx.stroke();
+        ctx.closePath();
         ctx.fillStyle = '#eeeeee';
         ctx.fillText(this.name, rel.x, rel.y);
         ctx.strokeStyle = '#222222';
@@ -73,11 +125,25 @@ function Cell(init) {
         this.mass = m;
         this.rad = m*20;
     }).bind(ret);
+    ret.phys = world.spawn(ret, 0, 0);
+    ret.onCollision = (function(e) {
+        var obj = e.body.o;
+        if(e.body.gid === this.phys.gid || (obj.mass && obj.mass < this.mass)) {
+            this.setMass(this.mass+obj.mass);
+            obj.onEat && obj.onEat()
+        }
+    }).bind(ret);
+    ret.onEat = (function() {
+        this.phys && world.kill(this.phys);
+        this.par && this.par.killChild && this.par.killChild(this);
+    }).bind(ret);
     return ret;
 }
 
 function Local() {
-    var ret = { cells: [ Cell() ] };
+    var ret = { cells: [ Cell() ], physGID: world.newGID() };
+    ret.cells[0].par = ret;
+    ret.cells[0].phys.gid = ret.physGID;
     ret.updateCell = (function(d,c) {
         var rel = Pos.sub( c.pos, cam.pos);
         var mouse = Pos.sub(
@@ -85,9 +151,10 @@ function Local() {
                     win.mouse, Pos.scale(
                         Pos.get(win.w,win.h), 0.5)), rel);
         var sqdist = Pos.sqhyp(mouse);
-        var vel = Pos.scale(mouse, 1/c.rad);
-        if(sqdist >= Math.pow(c.rad, 2))
-            vel = Pos.norm(mouse);
+        /* vel scales down when mouse is inside of cell */
+        var vel = (sqdist >= Math.pow(c.rad, 2)) ?
+            Pos.norm(mouse) : Pos.scale(mouse, 1/c.rad); 
+        /* jet is set right after cell is created */
         if(c.jet && c.jet.t < 3000) {
             if(c.jet.t == 0) {
                 Pos.set(c.jet, vel);
@@ -95,48 +162,44 @@ function Local() {
             vel = Pos.add(vel, Pos.scale(c.jet,(3000-c.jet.t)/3000));
             c.jet.t += d;
         }
-        c.pos = world.move(this, Pos.add(c.pos, Pos.scale(vel, d/c.mass)));
 
-        if(c.pos.x > field.x)
-            c.pos.x = field.x;
-        else if(c.pos.x < 0)
-            c.pos.x = 0;
-        if(c.pos.y > field.y)
-            c.pos.y = field.y;
-        else if(c.pos.y < 0)
-            c.pos.y = 0;
+        c.pos = world.move(c.phys, Pos.scale(vel, d/c.mass));
     }).bind(ret);
     ret.update = (function(d) {
-        foreach(this.cells, function(c) {
-            ret.updateCell(d,c);
-        });
+        this.cells.forEach(function(c) { ret.updateCell(d,c); });
     }).bind(ret);
     ret.draw = (function(ctx, trans) {
-        foreach(this.cells, function(c) {
-            c.draw(ctx, trans);
-        });
+        this.cells.forEach(function(c) { c.draw(ctx, trans); });
     }).bind(ret);
 
     ret.getFocus = (function() {
         var r = { x:0, y:0 }
-        foreach(this.cells, function(c) {
-            r = Pos.add(r,c.pos);
-        });
-        return Pos.scale(r, this.cells.length);
+        this.cells.forEach(function(c) { r = Pos.add(r,c.pos); });
+        return Pos.scale(r, 1/this.cells.length);
     }).bind(ret);
+
+    ret.killChild = (function(c) {
+        var i = this.cells.indexOf(c);
+        if(i !== -1) this.cells.splice(i, 1);
+    }).bind(ret)
 
     ret.onKeyDown = (function(e) {
         if(e.keyCode == 32) { /* space */
             var babies = []
-            foreach(this.cells, function(c) {
-                c.setMass(c.mass/2);
+            this.cells.forEach(function(c) {
+                if(c.mass <= 1) return;
                 var b = Cell();
-                b.mass = c.mass;
-                b.rad = c.rad;
+                b.par = ret;
+                b.setMass(Math.floor(c.mass/2));
+                c.setMass(Math.floor((c.mass+1)/2));
                 b.color = c.color;
                 b.name = c.name;
                 Pos.set(b.pos, c.pos);
                 b.jet = {x:0, y:0, t:0 };
+                b.phys.gid = c.phys.gid;
+                ++b.phys.clip;
+                ++c.phys.clip;
+                window.setTimeout(function() { --b.phys.clip, --c.phys.clip}, 3000);
                 babies[babies.length] = b;
             });
             this.cells.push.apply(this.cells, babies);
@@ -148,22 +211,30 @@ function Local() {
 
 function Food() {
     var ret = { 
+        mass: 1,
         pos: { 
             x: Math.floor(Math.random()*field.x), 
             y: Math.floor(Math.random()*field.y) 
         },
-        color: randomColor(),
-        mass: 1,
         rad: 20,
+        color: randomColor(),
+        phys: {},
     };
     ret.draw = (function(ctx, trans) {
-        var rel = Pos.add(this.pos, trans);
+        var rel = Pos.scale(Pos.add(this.pos, trans), trans.z);
         ctx.fillStyle = this.color;
         ctx.beginPath();
-        ctx.arc(rel.x, rel.y, this.rad, 0, 2*Math.PI);
+        ctx.arc(rel.x, rel.y, this.rad*trans.z, 0, 2*Math.PI);
         ctx.fill();
         ctx.closePath();
     }).bind(ret);
+    ret.onEat = (function() {
+        Pos.set(this.pos, Pos.get(
+                    Math.floor(Math.random()*field.x), 
+                    Math.floor(Math.random()*field.y)));
+        this.color = randomColor();
+    }).bind(ret);
+    ret.phys = world.spawn(ret);
     return ret;
 }
 
@@ -188,7 +259,7 @@ function Game() {
         var ctime = (new Date).getTime();
         var d = ctime - this.lastTick;
         var i, arLen, c;
-        foreach(this.players, function(c) {
+        this.players.forEach(function(c) {
             c.update(d);
         });
         this.camUpdate(d);
@@ -203,21 +274,19 @@ function Game() {
         win.ctx.lineWidth = 1;
         win.ctx.strokeStyle = '#444444';
         for(i=trans.x; i<=(field.x+trans.x) && i<win.w; i+=128) {
-            win.ctx.moveTo(i,trans.y);
-            win.ctx.lineTo(i,field.y+trans.y);
+            win.ctx.moveTo(i*trans.z,trans.y*trans.z);
+            win.ctx.lineTo(i*trans.z,(field.y+trans.y)*trans.z);
             win.ctx.stroke();
         }
         for(i=trans.y; i<=(field.y+trans.y) && i<win.h; i+=128) {
-            win.ctx.moveTo(trans.x,i);
-            win.ctx.lineTo(field.x+trans.x,i);
+            win.ctx.moveTo(trans.x*trans.z,i*trans.z);
+            win.ctx.lineTo((field.x+trans.x)*trans.z,i*trans.z);
             win.ctx.stroke();
         }
-        foreach(this.food, function(c) { c.draw(win.ctx, trans); });
+        this.food.forEach(function(c) { c.draw(win.ctx, trans); });
         win.ctx.textAlign = 'center';
         win.ctx.font = 'bold 30pt monospace';
-        foreach(this.players, function(c) {
-            c.draw(win.ctx, trans);
-        });
+        this.players.forEach(function(c) { c.draw(win.ctx, trans); });
     }).bind(ret);
     ret.start = (function() {
         cam.attach = Local();
