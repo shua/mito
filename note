@@ -1,0 +1,48 @@
+client
+
+* camera/viewport
+* mouse positioning
+* local pos/velocity updates
+* user name input
+* server selection
+
+* collision event within quadtree?
+
+server
+
+* collision check
+* collision events
+* user config setting
+* user color
+
+* quadtree partitioning
+* quadtree checking?
+
+
+events
+
+* user connect
+** client: name
+** host: position, color
+
+* cells move
+** client: vec(id, pos, vel)
+** host: [ correction(id, pos, vel) ]
+
+* cells split
+** client: key
+** host: vec(id, pos, vel)
+
+* collision
+** host: ab(pos, size)
+
+* die
+** host: id
+
+* grow
+** host: id, size
+
+* move
+** host: vec(plyr(id, pos, vel))
+
+

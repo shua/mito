@@ -1,242 +1,11 @@
 <html>
 <head>
-<script type='text/javascript'>
-var win = { w:0, h:0, ctx:{}, e:{}, mouse: { x:0, y:0 }, game: {} };
+<title>mito</title>
+<script type="text/javascript">
+var conn;
+var win = { w:0, h:0, ctx:{}, e:{}, mouse: { x:0, y:0 }, game:{} };
+var cam = { pos: { x:0, y:0 }, z:1, attach:{} };
 var field = { x: 4096, y: 4096 };
-var cam = { pos: { x:0, y:0 }, zoom:1, attach:{} };
-var world = { 
-    bodies: [],
-    id: 0,
-    gid: 1,
-    move: function(b1, v) {
-        var d = Pos.add(b1.o.pos, v);
-        var sv = Pos.sqhyp(v);
-        this.bodies.forEach(function(b2) {
-            var sd = 0, sb = 0, pd = {};
-            if(b1 === b2) return;
-            if(b1 === undefined) {
-                console.log("b1 is undefined");
-                return;
-            }
-            if(b2 === undefined) {
-                console.log("b2 is undefined");
-                return;
-            }
-            pd = Pos.sub(d, b2.o.pos);
-            sd = Pos.sqhyp(pd);
-            if(b1.gid !== 0 && b1.gid === b2.gid && b1.clip && b2.clip) { 
-                sb = Math.pow(b1.o.rad+b2.o.rad, 2);
-                if(sd <= sb) {
-                    sd = Math.sqrt(sd);
-                    sb = Math.sqrt(sb) - sd;
-                    v = Pos.scale(pd, sb/sd);
-                    d = Pos.add(d, v);
-                    sd = sb;
-                }
-            } else if(b1.o.onCollision) {
-                sb = Math.pow(b1.o.rad, 2);
-                if(sd <= sb) b1.o.onCollision({ body:b2, sqdst: sd, sqbnd: sb});
-            }
-        });
-        
-        if(d.x + b1.o.rad >= field.x) {
-            d.x = field.x - b1.o.rad;
-        } else if(d.x <= b1.o.rad) {
-            d.x = b1.o.rad;
-        } 
-        if(d.y + b1.o.rad >= field.y) {
-            d.y = field.y - b1.o.rad;
-        } else if(d.y <= b1.o.rad) {
-            d.y = b1.o.rad;
-        }
-        
-        return d;
-    },
-    spawn: function(o) {
-        var id = this.id;
-        this.bodies[id] = { o: o, gid: 0, clip: 0 };
-        ++this.id;
-        return this.bodies[id];
-    },
-    kill: function(b) {
-        var i = this.bodies.indexOf(b);
-        if(i !== -1)
-            this.bodies.splice(i, 1);
-    },
-    newGID: function() {
-        var gid= this.gid;
-        ++this.gid;
-        return gid;
-    },
-};
-
-function getMousePos(canvas, evt) {
-    var rect = canvas.getBoundingClientRect();
-    return {
-        x: evt.clientX - rect.left,
-        y: evt.clientY - rect.top
-    };
-}
-
-function randomColor() {
-    var r = Math.floor(Math.random() * 64)*4;
-    var g = Math.floor(Math.random() * 64)*4;
-    var b = Math.floor(Math.random() * 64)*4;
-    return 'rgb('+r+','+g+','+b+')';
-}
-
-var Pos = {
-    get: function(x,y) { return {x:x, y:y} },
-    set: function(a,b) { a.x=b.x; a.y=b.y },
-    add: function(a,b) { return {x:a.x+b.x, y:a.y+b.y } },
-    sub: function(a,b) { return {x:a.x-b.x, y:a.y-b.y } },
-    scale: function(a,s) { return {x:a.x*s, y:a.y*s } },
-    sqhyp: function(a) { return a.x*a.x+a.y*a.y },
-    norm: function(a) { return Pos.scale(a, 1/Math.sqrt(Pos.sqhyp(a))); }
-};
-
-function Cell(init) {
-    var ret = { 
-        mass: 4, 
-        pos: { x: 0, y:0 }, 
-        rad:80, 
-        color: randomColor(), 
-        name: 'Yooo',
-        phys: {},
-        par: undefined,
-    };
-    ret.draw = (function(ctx, trans) {
-        var rel = Pos.scale(Pos.add(this.pos, trans), trans.z);
-        ctx.fillStyle = this.color;
-        ctx.strokeStyle = '#888888';
-        ctx.lineWidth = 5;
-        ctx.beginPath();
-        ctx.arc(rel.x, rel.y, this.rad*trans.z, 0, 2*Math.PI);
-        ctx.fill();
-        ctx.stroke();
-        ctx.closePath();
-        ctx.fillStyle = '#eeeeee';
-        ctx.fillText(this.name, rel.x, rel.y);
-        ctx.strokeStyle = '#222222';
-        ctx.lineWidth = 1;
-        ctx.strokeText(this.name, rel.x, rel.y);
-    }).bind(ret);
-    ret.setMass = (function(m) {
-        this.mass = m;
-        this.rad = m*20;
-    }).bind(ret);
-    ret.phys = world.spawn(ret, 0, 0);
-    ret.onCollision = (function(e) {
-        var obj = e.body.o;
-        if(e.body.gid === this.phys.gid || (obj.mass && obj.mass < this.mass)) {
-            this.setMass(this.mass+obj.mass);
-            obj.onEat && obj.onEat()
-        }
-    }).bind(ret);
-    ret.onEat = (function() {
-        this.phys && world.kill(this.phys);
-        this.par && this.par.killChild && this.par.killChild(this);
-    }).bind(ret);
-    return ret;
-}
-
-function Local() {
-    var ret = { cells: [ Cell() ], physGID: world.newGID() };
-    ret.cells[0].par = ret;
-    ret.cells[0].phys.gid = ret.physGID;
-    ret.updateCell = (function(d,c) {
-        var rel = Pos.sub( c.pos, cam.pos);
-        var mouse = Pos.sub(
-                Pos.sub(
-                    win.mouse, Pos.scale(
-                        Pos.get(win.w,win.h), 0.5)), rel);
-        var sqdist = Pos.sqhyp(mouse);
-        /* vel scales down when mouse is inside of cell */
-        var vel = (sqdist >= Math.pow(c.rad, 2)) ?
-            Pos.norm(mouse) : Pos.scale(mouse, 1/c.rad); 
-        /* jet is set right after cell is created */
-        if(c.jet && c.jet.t < 3000) {
-            if(c.jet.t == 0) {
-                Pos.set(c.jet, vel);
-            }
-            vel = Pos.add(vel, Pos.scale(c.jet,(3000-c.jet.t)/3000));
-            c.jet.t += d;
-        }
-
-        c.pos = world.move(c.phys, Pos.scale(vel, d/c.mass));
-    }).bind(ret);
-    ret.update = (function(d) {
-        this.cells.forEach(function(c) { ret.updateCell(d,c); });
-    }).bind(ret);
-    ret.draw = (function(ctx, trans) {
-        this.cells.forEach(function(c) { c.draw(ctx, trans); });
-    }).bind(ret);
-
-    ret.getFocus = (function() {
-        var r = { x:0, y:0 }
-        this.cells.forEach(function(c) { r = Pos.add(r,c.pos); });
-        return Pos.scale(r, 1/this.cells.length);
-    }).bind(ret);
-
-    ret.killChild = (function(c) {
-        var i = this.cells.indexOf(c);
-        if(i !== -1) this.cells.splice(i, 1);
-    }).bind(ret)
-
-    ret.onKeyDown = (function(e) {
-        if(e.keyCode == 32) { /* space */
-            var babies = []
-            this.cells.forEach(function(c) {
-                if(c.mass <= 1) return;
-                var b = Cell();
-                b.par = ret;
-                b.setMass(Math.floor(c.mass/2));
-                c.setMass(Math.floor((c.mass+1)/2));
-                b.color = c.color;
-                b.name = c.name;
-                Pos.set(b.pos, c.pos);
-                b.jet = {x:0, y:0, t:0 };
-                b.phys.gid = c.phys.gid;
-                ++b.phys.clip;
-                ++c.phys.clip;
-                window.setTimeout(function() { --b.phys.clip, --c.phys.clip}, 3000);
-                babies[babies.length] = b;
-            });
-            this.cells.push.apply(this.cells, babies);
-        }
-    }).bind(ret);
-    window.addEventListener('keydown', ret.onKeyDown);
-    return ret;
-}
-
-function Food() {
-    var ret = { 
-        mass: 1,
-        pos: { 
-            x: Math.floor(Math.random()*field.x), 
-            y: Math.floor(Math.random()*field.y) 
-        },
-        rad: 20,
-        color: randomColor(),
-        phys: {},
-    };
-    ret.draw = (function(ctx, trans) {
-        var rel = Pos.scale(Pos.add(this.pos, trans), trans.z);
-        ctx.fillStyle = this.color;
-        ctx.beginPath();
-        ctx.arc(rel.x, rel.y, this.rad*trans.z, 0, 2*Math.PI);
-        ctx.fill();
-        ctx.closePath();
-    }).bind(ret);
-    ret.onEat = (function() {
-        Pos.set(this.pos, Pos.get(
-                    Math.floor(Math.random()*field.x), 
-                    Math.floor(Math.random()*field.y)));
-        this.color = randomColor();
-    }).bind(ret);
-    ret.phys = world.spawn(ret);
-    return ret;
-}
 
 function Game() {
     var ret = {
@@ -246,88 +15,58 @@ function Game() {
         fps: 60,
         _int: {},
     };
-    ret.camUpdate = (function(d) {
-        if(cam.attach.getFocus) {
-            cam.pos = cam.attach.getFocus();
-        } else if(cam.attach.pos.x && cam.attach.pos.y) {
-            cam.pos = { x:cam.attach.pos.x, y:cam.attach.pos.y };
-        } else if(cam.attach.x && cam.attach.y) {
-            cam.pos = { x:cam.attach.x, y:cam.attach.y };
-        }
-    }).bind(ret);
     ret.update = (function() {
         var ctime = (new Date).getTime();
         var d = ctime - this.lastTick;
-        var i, arLen, c;
-        this.players.forEach(function(c) {
-            c.update(d);
-        });
-        this.camUpdate(d);
         this.draw();
         this.lastTick = ctime;
     }).bind(ret);
     ret.draw = (function() {
-        var trans = Pos.sub(Pos.scale(Pos.get(win.w,win.h),0.5),cam.pos);
-        var c;
-        trans.z = cam.zoom;
-        win.ctx.clearRect(0,0,win.w,win.h);
-        win.ctx.lineWidth = 1;
-        win.ctx.strokeStyle = '#444444';
-        for(i=trans.x; i<=(field.x+trans.x) && i<win.w; i+=128) {
-            win.ctx.moveTo(i*trans.z,trans.y*trans.z);
-            win.ctx.lineTo(i*trans.z,(field.y+trans.y)*trans.z);
-            win.ctx.stroke();
-        }
-        for(i=trans.y; i<=(field.y+trans.y) && i<win.h; i+=128) {
-            win.ctx.moveTo(trans.x*trans.z,i*trans.z);
-            win.ctx.lineTo((field.x+trans.x)*trans.z,i*trans.z);
-            win.ctx.stroke();
-        }
-        this.food.forEach(function(c) { c.draw(win.ctx, trans); });
-        win.ctx.textAlign = 'center';
-        win.ctx.font = 'bold 30pt monospace';
-        this.players.forEach(function(c) { c.draw(win.ctx, trans); });
     }).bind(ret);
-    ret.start = (function() {
-        cam.attach = Local();
-        this.players[this.players.length] = cam.attach;
-        for(var i=0; i<50; ++i) this.food[i] = Food();
-        this._int = setInterval(this.update, 1000/this.fps);
-        this.lastTick = (new Date).getTime();
-    }).bind(ret);
-    ret.stop = (function() {
-        clearInterval(this._int);
-    }).bind(ret);
-    return ret;
+} 
+
+function getMousePos(canvas, evt) {
+    var rect = canvas.getBoundingClientRect();
+    return {
+        x: evt.clientX - rect.left,
+        y: evt.clientY - rect.top
+    };
 }
 
-document.addEventListener ('DOMContentLoaded',  function() {
+document.addEventListener('DOMContentLoaded', function() {
+    if (window["WebSocket"]) {
+        conn = new WebSocket("ws://{{$}}/ws");
+        conn.onclose = function(e) {
+            console.log("connection closed")
+        }
+        conn.onmessage = function(e) {
+            console.log("message received", e.data)
+        }
+    } else {
+        console.log("websockets not supported")
+    }
+
     win.e = document.getElementById('mito');
     win.e.addEventListener('mousemove', function(e) {
         win.mouse = getMousePos(win.e, e);
     });
-    window.addEventListener('resize', function(e) {
+    function setCanvasDim(e) {
         win.w = win.e.offsetWidth;
         win.h = win.e.offsetHeight;
         win.e.width = win.w;
         win.e.height = win.h;
-    });
-    win.game = Game();
-    win.w = win.e.offsetWidth;
-    win.h = win.e.offsetHeight;
-    win.e.width = win.w;
-    win.e.height = win.h;
+    }
+    window.addEventListener('resize', setCanvasDim);
+    setCanvasDim();
     win.ctx = win.e.getContext('2d');
     win.ctx.fillStyle = '#444444';
-
-    win.game.start();
-});
+})
 </script>
 <style type="text/css">
 * { margin:0; }
 </style>
 </head>
 <body>
-    <canvas id="mito" style="width:100%;height:100%" />
+    <canvas id="mito" style="height:100%;width:100%" />
 </body>
 </html>
