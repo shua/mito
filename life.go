@@ -1,36 +1,36 @@
 package main
 
 type life struct {
-    connections map[*connection] bool
+    connections map[*mind] bool
     broadcast chan []byte
-    join chan *connection
-    leave chan *connection
+    join chan *mind
+    leave chan *mind
 }
 
 var l = life{
-    connections:    make(map[*connection]bool),
+    connections:    make(map[*mind]bool),
     broadcast:      make(chan []byte),
-    join:           make(chan *connection),
-    leave:          make(chan *connection),
+    join:           make(chan *mind),
+    leave:          make(chan *mind),
 }
 
 func (l *life) run() {
     for {
         select {
-        case c := <-l.join:
-            l.connections[c] = true
-        case c := <-l.leave:
-            if _, ok := l.connections[c]; ok {
-                delete(l.connections, c)
-                close(c.send)
+        case m := <-l.join:
+            l.connections[m] = true
+        case m := <-l.leave:
+            if _, ok := l.connections[m]; ok {
+                delete(l.connections, m)
+                close(m.send)
             }
-        case m := <-l.broadcast:
-            for c := range l.connections {
+        case s := <-l.broadcast:
+            for m := range l.connections {
                 select {
-                case c.send <- m:
+                case m.send <- s:
                 default:
-                    close(c.send)
-                    delete(l.connections, c)
+                    close(m.send)
+                    delete(l.connections, m)
                 }
             }
         }
